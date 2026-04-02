@@ -267,6 +267,12 @@ class CodexSectionGenerator:
                 "Mention the exact area name in visible copy, write 3 to 5 short natural-language bullets, "
                 "and never output JSON-like strings, field names, or meta instructions."
             ),
+            "areas_list": (
+                "This section should summarize real service coverage areas around Austin in plain language. "
+                "List neighborhoods or nearby cities as natural-language bullet points with short coverage notes. "
+                "Do not output JSON, field names, ids, or machine-readable area objects. "
+                "Use a local-fit CTA such as Check Availability or Check Service Area."
+            ),
             "service_summary": (
                 "This section should summarize the main plumbing services offered in the specific local area. "
                 "Combine service wording with local coverage wording, and use a local-fit CTA rather than a direct contact CTA."
@@ -281,6 +287,17 @@ class CodexSectionGenerator:
                 "and do not leave body paragraphs or the CTA empty. "
                 "Write exactly 2 short body paragraphs and 4 to 6 plain-language FAQ teaser bullets. "
                 "Make the bullets read like natural customer questions, not answers or JSON fields."
+            ),
+            "contact_form": (
+                "This section should describe a local service contact form in plain language. "
+                "Explain what the visitor can submit, why it helps, and keep the CTA contact-oriented. "
+                "Do not output form config JSON, field objects, ids, placeholders, or machine-readable schema."
+            ),
+            "service_area_summary": (
+                "This section should summarize local plumbing coverage around Austin in plain language. "
+                "Mention Austin and nearby areas naturally, include 3 to 5 simple coverage bullets, "
+                "and use a local-fit CTA such as Check Availability or Check Service Area. "
+                "Do not output machine-readable JSON, service_area objects, or CTA objects."
             ),
             "contact_cta": (
                 "This is a conversion CTA section. "
@@ -313,15 +330,25 @@ class CodexSectionGenerator:
             repaired_content["cta_label"] = "Learn More"
             return repaired_content, True, "benefits_cta_normalized"
 
-        if section_name in {"local_relevance", "service_summary"} and reasons == ["cta_intent_mismatch"]:
+        if section_name in {"local_relevance", "service_summary", "areas_list"} and reasons == ["cta_intent_mismatch"]:
             repaired_content = dict(generated_content)
             repaired_content["cta_label"] = "Check Availability"
             return repaired_content, True, f"{section_name}_cta_normalized"
+
+        if section_name == "service_area_summary" and reasons == ["cta_intent_mismatch"]:
+            repaired_content = dict(generated_content)
+            repaired_content["cta_label"] = "Check Availability"
+            return repaired_content, True, "service_area_summary_cta_normalized"
 
         if section_name == "faq_preview":
             repaired_content = self.repair_empty_faq_preview(item, generated_content)
             if repaired_content is not None:
                 return repaired_content, True, "faq_preview_empty_output_repaired"
+
+        if section_name == "contact_form":
+            repaired_content = self.repair_contact_form_embedded_json(generated_content)
+            if repaired_content is not None:
+                return repaired_content, True, "contact_form_embedded_json_repaired"
 
         if section_name == "contact_cta":
             repaired_content = self.repair_contact_cta_embedded_json(generated_content)
@@ -333,7 +360,37 @@ class CodexSectionGenerator:
             if repaired_content is not None:
                 return repaired_content, True, "local_relevance_embedded_json_repaired"
 
+        if section_name == "areas_list":
+            repaired_content = self.repair_areas_list_embedded_json(generated_content)
+            if repaired_content is not None:
+                return repaired_content, True, "areas_list_embedded_json_repaired"
+
+        if section_name == "service_area_summary":
+            repaired_content = self.repair_service_area_summary_embedded_json(generated_content)
+            if repaired_content is not None:
+                return repaired_content, True, "service_area_summary_embedded_json_repaired"
+
         return generated_content, False, ""
+
+    def maybe_repair_generated_content(
+        self,
+        item: dict[str, Any],
+        generated_content: dict[str, Any],
+        quality_result: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any], bool, str]:
+        repaired_content, repair_applied, repair_note = self.try_repair_generated_content(
+            item,
+            generated_content,
+            quality_result,
+        )
+        if not repair_applied:
+            return generated_content, quality_result, False, ""
+
+        repaired_quality = self.quality_check_generated_content(item, repaired_content)
+        if not repaired_quality.get("passed"):
+            return generated_content, quality_result, False, ""
+
+        return repaired_content, repaired_quality, True, repair_note
 
     def repair_empty_faq_preview(
         self,
@@ -405,7 +462,6 @@ class CodexSectionGenerator:
         is_retry: bool = False,
     ) -> str:
         payload = item.get("content_payload", {})
-        niche = str(payload.get("target_keywords", [""])[0]).replace(str(item.get("page_slug", "")), "").strip()
         project_package_path = Path(self.settings.artifacts_dir) / "project_package.json"
         city = ""
         niche_value = ""
@@ -783,6 +839,47 @@ class CodexSectionGenerator:
 
         return failures
 
+    def areas_list_checks(
+        self,
+        combined_text: str,
+        body_paragraphs: list[str],
+        bullet_points: list[str],
+    ) -> list[str]:
+        failures: list[str] = []
+        non_empty_bullets = [value for value in bullet_points if str(value).strip()]
+        local_terms = [
+            "austin",
+            "downtown",
+            "north",
+            "south",
+            "east",
+            "west",
+            "round rock",
+            "cedar park",
+            "pflugerville",
+            "lakeway",
+            "leander",
+            "georgetown",
+            "buda",
+            "kyle",
+        ]
+
+        if not self.contains_any_term(combined_text, local_terms):
+            failures.append("areas_list_missing_local_coverage")
+        if not self.has_non_empty_list_items(body_paragraphs):
+            failures.append("areas_list_empty_body")
+        if len(non_empty_bullets) < 4:
+            failures.append("areas_list_insufficient_bullets")
+        if any(self.is_json_like_string(value) for value in body_paragraphs + non_empty_bullets):
+            failures.append("areas_list_json_like_copy")
+        if self.contains_any_term(
+            combined_text,
+            ["json", "section id", "section type", "areas list json", "field", "object"],
+        ):
+            failures.append("areas_list_meta_copy")
+
+        return failures
+
     def repair_local_relevance_embedded_json(
         self,
         generated_content: dict[str, Any],
@@ -858,6 +955,58 @@ class CodexSectionGenerator:
 
         return repaired_content
 
+    def repair_areas_list_embedded_json(
+        self,
+        generated_content: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        body_paragraphs = [str(value) for value in generated_content.get("body_paragraphs", [])]
+        if len(body_paragraphs) != 1 or not self.is_json_like_string(body_paragraphs[0]):
+            return None
+
+        try:
+            embedded_payload = json.loads(body_paragraphs[0])
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(embedded_payload, dict):
+            return None
+
+        headline = str(embedded_payload.get("headline", "")).strip() or str(embedded_payload.get("title", "")).strip()
+        subheadline = (
+            str(embedded_payload.get("subheadline", "")).strip()
+            or str(embedded_payload.get("intro", "")).strip()
+        )
+        intro = str(embedded_payload.get("intro", "")).strip()
+        closing = str(embedded_payload.get("closing", "")).strip()
+        areas = embedded_payload.get("areas", [])
+        bullet_points: list[str] = []
+
+        if isinstance(areas, list):
+            for area in areas:
+                if not isinstance(area, dict):
+                    continue
+                name = str(area.get("name", "")).strip()
+                description = str(area.get("description", "")).strip()
+                if name and description:
+                    bullet_points.append(f"{name}: {description}")
+                elif name:
+                    bullet_points.append(name)
+                elif description:
+                    bullet_points.append(description)
+
+        repaired_content = {
+            "headline": headline,
+            "subheadline": subheadline,
+            "body_paragraphs": [paragraph for paragraph in [intro, closing] if paragraph],
+            "bullet_points": bullet_points,
+            "cta_label": "Check Service Area",
+        }
+
+        if not self.validate_generated_content(repaired_content):
+            return None
+
+        return repaired_content
+
     def service_summary_checks(
         self,
         item: dict[str, Any],
@@ -911,6 +1060,127 @@ class CodexSectionGenerator:
 
         return failures
 
+    def contact_form_checks(
+        self,
+        combined_text: str,
+        body_paragraphs: list[str],
+        bullet_points: list[str],
+        cta_label: str,
+    ) -> list[str]:
+        failures: list[str] = []
+        non_empty_bullets = [value for value in bullet_points if str(value).strip()]
+
+        if not self.has_non_empty_list_items(body_paragraphs):
+            failures.append("contact_form_empty_body")
+        if len(non_empty_bullets) < 3:
+            failures.append("contact_form_insufficient_bullets")
+        if any(self.is_json_like_string(value) for value in body_paragraphs + non_empty_bullets):
+            failures.append("contact_form_json_like_copy")
+        if self.contains_any_term(
+            combined_text,
+            ["section id", "section type", "placeholder", "required", "fields", "privacy note"],
+        ):
+            failures.append("contact_form_meta_copy")
+        if not cta_label.strip():
+            failures.append("contact_form_empty_cta")
+
+        return failures
+
+    def service_area_summary_checks(
+        self,
+        combined_text: str,
+        body_paragraphs: list[str],
+        bullet_points: list[str],
+        cta_label: str,
+    ) -> list[str]:
+        failures: list[str] = []
+        non_empty_bullets = [value for value in bullet_points if str(value).strip()]
+        local_terms = [
+            "austin",
+            "downtown",
+            "north",
+            "south",
+            "east",
+            "west",
+            "round rock",
+            "cedar park",
+            "pflugerville",
+            "coverage",
+            "service area",
+        ]
+
+        if not self.contains_any_term(combined_text, local_terms):
+            failures.append("service_area_summary_missing_local_coverage")
+        if not self.has_non_empty_list_items(body_paragraphs):
+            failures.append("service_area_summary_empty_body")
+        if len(non_empty_bullets) < 3:
+            failures.append("service_area_summary_insufficient_bullets")
+        if any(self.is_json_like_string(value) for value in body_paragraphs + non_empty_bullets):
+            failures.append("service_area_summary_json_like_copy")
+        if self.contains_any_term(
+            combined_text,
+            ["section id", "section type", "service area", "customer value points", "cta", "object"],
+        ):
+            failures.append("service_area_summary_meta_copy")
+        if not cta_label.strip():
+            failures.append("service_area_summary_empty_cta")
+
+        return failures
+
+    def repair_contact_form_embedded_json(
+        self,
+        generated_content: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        bullet_points = [str(value) for value in generated_content.get("bullet_points", [])]
+        if len(bullet_points) != 1 or not self.is_json_like_string(bullet_points[0]):
+            return None
+
+        try:
+            embedded_payload = json.loads(bullet_points[0])
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(embedded_payload, dict):
+            return None
+
+        intro = str(embedded_payload.get("intro", "")).strip()
+        subheadline = str(embedded_payload.get("subheadline", "")).strip()
+        headline = (
+            str(embedded_payload.get("headline", "")).strip()
+            or str(embedded_payload.get("eyebrow", "")).strip()
+        )
+
+        trust_points = embedded_payload.get("trust_points", [])
+        repaired_bullets = [str(point).strip() for point in trust_points if str(point).strip()]
+
+        form_block = embedded_payload.get("form", {})
+        submit_label = ""
+        if isinstance(form_block, dict):
+            submit_label = str(form_block.get("submit_label", "")).strip()
+
+        success_message = str(embedded_payload.get("success_message", "")).strip()
+        service_area = ""
+        contact_details = embedded_payload.get("contact_details", {})
+        if isinstance(contact_details, dict):
+            service_area = str(contact_details.get("service_area", "")).strip()
+
+        repaired_body = [paragraph for paragraph in [intro, success_message] if paragraph]
+        if not repaired_body and service_area:
+            repaired_body = [f"Use the contact form to request plumbing help and confirm availability in {service_area}."]
+
+        repaired_content = {
+            "headline": headline,
+            "subheadline": subheadline,
+            "body_paragraphs": repaired_body,
+            "bullet_points": repaired_bullets,
+            "cta_label": submit_label,
+        }
+
+        if not self.validate_generated_content(repaired_content):
+            return None
+
+        return repaired_content
+
     def repair_contact_cta_embedded_json(
         self,
         generated_content: dict[str, Any],
@@ -958,6 +1228,66 @@ class CodexSectionGenerator:
 
         return repaired_content
 
+    def repair_service_area_summary_embedded_json(
+        self,
+        generated_content: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        body_paragraphs = [str(value) for value in generated_content.get("body_paragraphs", [])]
+        if len(body_paragraphs) != 1 or not self.is_json_like_string(body_paragraphs[0]):
+            return None
+
+        try:
+            embedded_payload = json.loads(body_paragraphs[0])
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(embedded_payload, dict):
+            return None
+
+        headline = (
+            str(embedded_payload.get("heading", "")).strip()
+            or str(embedded_payload.get("headline", "")).strip()
+            or str(generated_content.get("headline", "")).strip()
+        )
+        summary = str(embedded_payload.get("summary", "")).strip()
+        local_relevance = str(embedded_payload.get("local_relevance", "")).strip()
+
+        bullet_points: list[str] = []
+        customer_value_points = embedded_payload.get("customer_value_points", [])
+        if isinstance(customer_value_points, list):
+            bullet_points.extend(str(point).strip() for point in customer_value_points if str(point).strip())
+
+        service_area = embedded_payload.get("service_area", {})
+        if isinstance(service_area, dict):
+            neighborhoods = service_area.get("neighborhoods", [])
+            nearby_communities = service_area.get("nearby_communities", [])
+            if isinstance(neighborhoods, list) and neighborhoods:
+                bullet_points.append(
+                    "Austin neighborhoods served: " + ", ".join(str(value).strip() for value in neighborhoods[:4] if str(value).strip())
+                )
+            if isinstance(nearby_communities, list) and nearby_communities:
+                bullet_points.append(
+                    "Nearby communities: " + ", ".join(str(value).strip() for value in nearby_communities[:4] if str(value).strip())
+                )
+
+        cta_text = ""
+        cta_block = embedded_payload.get("cta", {})
+        if isinstance(cta_block, dict):
+            cta_text = str(cta_block.get("text", "")).strip()
+
+        repaired_content = {
+            "headline": headline,
+            "subheadline": summary or str(generated_content.get("subheadline", "")).strip(),
+            "body_paragraphs": [paragraph for paragraph in [local_relevance] if paragraph],
+            "bullet_points": bullet_points,
+            "cta_label": cta_text or "Check Availability",
+        }
+
+        if not self.validate_generated_content(repaired_content):
+            return None
+
+        return repaired_content
+
     def section_semantic_checks(
         self,
         section_name: str,
@@ -968,7 +1298,9 @@ class CodexSectionGenerator:
             "services_overview": ["service", "services", "repair", "installation", "plumbing"],
             "trust_signals": ["trust", "reliable", "dependable", "confidence", "professional"],
             "faq_preview": ["faq", "question", "questions", "answer", "answers", "concern"],
+            "contact_form": ["contact", "form", "request", "service", "schedule"],
             "contact_cta": ["contact", "call", "request", "book", "help"],
+            "service_area_summary": ["austin", "area", "coverage", "serve", "service"],
         }
         required_terms = checks.get(section_name, [])
         failures = []
@@ -1072,6 +1404,16 @@ class CodexSectionGenerator:
                 score -= 20
                 reasons.append(failure)
 
+        if section_name == "areas_list":
+            areas_list_failures = self.areas_list_checks(
+                combined_text,
+                body_paragraphs,
+                bullet_points,
+            )
+            for failure in areas_list_failures:
+                score -= 20
+                reasons.append(failure)
+
         if section_name == "service_summary":
             summary_failures = self.service_summary_checks(
                 item,
@@ -1090,6 +1432,28 @@ class CodexSectionGenerator:
                 cta_label,
             )
             for failure in contact_failures:
+                score -= 20
+                reasons.append(failure)
+
+        if section_name == "contact_form":
+            contact_form_failures = self.contact_form_checks(
+                combined_text,
+                body_paragraphs,
+                bullet_points,
+                cta_label,
+            )
+            for failure in contact_form_failures:
+                score -= 20
+                reasons.append(failure)
+
+        if section_name == "service_area_summary":
+            service_area_summary_failures = self.service_area_summary_checks(
+                combined_text,
+                body_paragraphs,
+                bullet_points,
+                cta_label,
+            )
+            for failure in service_area_summary_failures:
                 score -= 20
                 reasons.append(failure)
 
@@ -1122,7 +1486,16 @@ class CodexSectionGenerator:
             return False
 
         quality_result = self.quality_check_generated_content(item, generated_content)
-        return bool(quality_result.get("passed"))
+        repaired_content, repaired_quality, repair_applied, _repair_note = self.maybe_repair_generated_content(
+            item,
+            generated_content,
+            quality_result,
+        )
+
+        if repair_applied and repaired_content != generated_content:
+            self.write_generated_section(item, repaired_content)
+
+        return bool(repaired_quality.get("passed"))
 
     def sanitize_preview(self, value: str, limit: int) -> str:
         return value[:limit]
@@ -1444,18 +1817,12 @@ class CodexSectionGenerator:
                     debug_entry["expected_cta_intent"] = quality_result["expected_cta_intent"]
                     debug_entry["cta_intent_match"] = quality_result["cta_intent_match"]
 
-                    if quality_result["passed"]:
-                        final_generated_content = generated_content
-                        final_failure_reason = ""
-                        break
-
-                    repaired_content, repair_applied, repair_note = self.try_repair_generated_content(
+                    repaired_content, repaired_quality, repair_applied, repair_note = self.maybe_repair_generated_content(
                         item,
                         generated_content,
                         quality_result,
                     )
                     if repair_applied:
-                        repaired_quality = self.quality_check_generated_content(item, repaired_content)
                         debug_entry["repair_applied"] = True
                         debug_entry["repair_note"] = repair_note
                         debug_entry["quality_check_passed"] = repaired_quality["passed"]
@@ -1468,6 +1835,11 @@ class CodexSectionGenerator:
                             final_generated_content = repaired_content
                             final_failure_reason = ""
                             break
+
+                    if quality_result["passed"]:
+                        final_generated_content = generated_content
+                        final_failure_reason = ""
+                        break
 
                     final_failure_reason = "quality_check_failed"
                     if attempt_number == 2:

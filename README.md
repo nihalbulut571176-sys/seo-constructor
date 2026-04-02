@@ -225,6 +225,7 @@ For the `services` hub page, `faq_preview` also has a narrow deterministic recov
 `local_relevance` and `service_summary` now have location-page quality checks for area relevance, local coverage wording, and minimum structured detail so generated geo pages can be trusted as generated-first outputs.
 `local_relevance` also explicitly blocks JSON-like/meta copy and requires visible area-context language, which keeps geo pages usable in the generated-first snapshot instead of falling back to weak machine-shaped outputs.
 `contact_cta` now blocks JSON-like body blobs and can recover embedded contact payloads before downstream assembly, which keeps generated-first pages cleaner for future template/code generation.
+`contact_form` and `service_area_summary` now also repair embedded JSON/config-shaped outputs into clean section content, which keeps generated-first contact pages usable without weakening fallback safety.
 
 This is the first local AI generation layer without requiring `OPENAI_API_KEY`.
 
