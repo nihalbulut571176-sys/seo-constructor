@@ -1,0 +1,13 @@
+{
+  "project_name": "plumber-austin-seo",
+  "niche": "plumbing services",
+  "city": "Austin",
+  "country": "USA",
+  "language": "en",
+  "site_type": "local_service_site",
+  "max_pages": 25,
+  "budget_mode": "standard",
+  "include_images": true,
+  "include_blog": true,
+  "notes": "Test project for building a local SEO website structure for a plumbing company in Austin."
+}
